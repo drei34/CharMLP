@@ -68,16 +68,27 @@ def estimate_loss():
     return out
 
 # RNN
-class RNNLanguageModel(nn.Module):
+class WaveNetMLPLanguageModel(nn.Module):
 
     def __init__(self):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, d_model)
         self.ln_f = nn.LayerNorm(vocab_size) # final layer norm
-        self.lstm = nn.RNN(d_model, d_hidden, n_layer, batch_first=True)
-        self.ff = nn.Linear(d_hidden, vocab_size)
+        self.ln_1 = nn.LayerNorm(d_model // 2)
+        self.ln_2 = nn.LayerNorm(d_model // 4)
+        self.ln_3 = nn.LayerNorm(d_model // 8)
+
+        self.linear_1 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+        self.linear_2 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+        self.linear_3 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+        self.linear_4 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+        self.linear_5 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+        self.linear_6 = nn.Linear(2 * d_model, d_model) # (2 * 384, 384)
+
+        self.ff = nn.Linear(4 * d_model, vocab_size)
         self.gelu = nn.GELU()
+
         self.dp_1 = nn.Dropout(dropout)
         self.dp_2 = nn.Dropout(dropout)
 
@@ -87,22 +98,36 @@ class RNNLanguageModel(nn.Module):
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx) # (B,T,d_model)
 
-        #print(tok_emb.dtype)
+        # Do this here!!!
 
-        tok_emb = self.dp_1(tok_emb)
+        x = tok_emb.view(B, T // 2, -1) 
+
+        x = self.linear_1(x) # (B, T // 2, d_model), T  = 128
+
+        x = x.view(B, T // 4, -1)
+
+        x = self.linear_2(x) # (B, T // 4, d_model), T = 64
+
+        x = x.view(B, T // 8, -1)
+
+        x = self.linear_3(x) # (B, T // 8, d_model), T = 32
+
+        x = x.view(B, T // 16, -1)
+
+        x = self.linear_4(x) # (B, T // 16, d_model), T = 16
+
+        x = x.view(B, T // 32, -1)
+
+        x = self.linear_5(x) # (B, T // 32, d_model), T = 8
+
+        x = x.view(B, T // 64, -1)
+
+        x = self.linear_6(x) # (B, T // 64, d_model), T // 64 = 4
+
+        x = x.view(B, -1) # (B, 4 * d_model)
+
+        logits = self.ff(x) # (B, vocab_size)
         
-        logits, _ = self.lstm(tok_emb) # (B,T,d_hidden)
-
-        #print(logits.dtype)
-
-        logits = self.ff(logits) # (B, T, vocab_size)
-
-        #print(logits.dtype)
-        
-        logits = self.gelu(self.ln_f(logits)) # (B, T, vocab_size)
-
-        logits = self.dp_2(logits)
-
         if targets is None:
             loss = None
         else:
@@ -130,7 +155,7 @@ class RNNLanguageModel(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
         return idx
 
-model = RNNLanguageModel()
+model = WaveNetMLPLanguageModel()
 m = model.to(device)
 # print the number of parameters in the model
 print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
